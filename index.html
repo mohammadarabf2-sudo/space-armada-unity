@@ -1,0 +1,629 @@
+<!doctype html>
+<html lang="fa">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+  <title>Space Armada</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      color: #fff;
+      font-family: Vazirmatn, system-ui, sans-serif;
+    }
+    #gameContainer {
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(circle at center, #0a1128 0%, #04070d 50%, #000 100%);
+    }
+    .hud {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 20;
+      background: rgba(0,0,0,0.35);
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .footer {
+      position: absolute;
+      bottom: 12px;
+      left: 12px;
+      z-index: 20;
+      color: #b0b7c9;
+      font-size: 12px;
+      opacity: 0.85;
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+</head>
+<body>
+  <div id="gameContainer"></div>
+  <div class="hud">
+    حرکت: WASD / فلش‌ها<br>
+    شلیک: خودکار<br>
+    بمب: Space
+  </div>
+  <div class="footer">Space Armada — نسخهٔ وب / playable demo</div>
+
+  <script>
+    class Boot extends Phaser.Scene {
+      constructor(){ super('Boot'); }
+      create(){
+        this.makeTextures();
+        this.scene.start('Play');
+      }
+      makeTextures(){
+        let g = this.add.graphics();
+
+        // player 0
+        g.fillStyle(0x89cff0, 1);
+        g.fillTriangle(-12, 16, 12, 16, 0, -18);
+        g.lineStyle(2, 0x4fb0e6, 1);
+        g.strokeTriangle(-12, 16, 12, 16, 0, -18);
+        g.generateTexture('player_0', 48, 48);
+        g.clear();
+
+        // player 1
+        g.fillStyle(0xffdd57, 1);
+        g.fillTriangle(-16, 18, 16, 18, 0, -20);
+        g.fillRect(-4, 0, 8, 10);
+        g.lineStyle(2, 0xe6be3d, 1);
+        g.strokeTriangle(-16, 18, 16, 18, 0, -20);
+        g.generateTexture('player_1', 64, 64);
+        g.clear();
+
+        // player 2
+        g.fillStyle(0xd68cff, 1);
+        g.fillRoundedRect(-18, -20, 36, 36, 6);
+        g.fillStyle(0x8a2be2, 1);
+        g.fillTriangle(-12, 10, 12, 10, 0, -10);
+        g.lineStyle(2, 0xa56df0, 1);
+        g.strokeRoundedRect(-18, -20, 36, 36, 6);
+        g.generateTexture('player_2', 72, 72);
+        g.clear();
+
+        // plume
+        g.fillStyle(0xff6600, 1);
+        g.fillEllipse(0, 18, 8, 14);
+        g.generateTexture('plume', 32, 32);
+        g.clear();
+
+        // enemy small
+        g.fillStyle(0xff6b6b, 1);
+        g.fillCircle(0, 0, 10);
+        g.lineStyle(2, 0xaa3f3f, 1);
+        g.strokeCircle(0, 0, 10);
+        g.generateTexture('enemy_small', 28, 28);
+        g.clear();
+
+        // enemy medium
+        g.fillStyle(0x6bffb3, 1);
+        g.fillEllipse(-12, 0, 24, 16);
+        g.lineStyle(2, 0x27a56a, 1);
+        g.strokeEllipse(-12, 0, 24, 16);
+        g.generateTexture('enemy_med', 40, 28);
+        g.clear();
+
+        // bullet player
+        g.fillStyle(0xffffff, 1);
+        g.fillRect(-1, -6, 2, 12);
+        g.generateTexture('bullet', 6, 18);
+        g.clear();
+
+        // bullet enemy
+        g.fillStyle(0xffff66, 1);
+        g.fillRect(-2, -8, 4, 16);
+        g.generateTexture('bullet_yellow', 8, 20);
+        g.clear();
+
+        g.destroy();
+      }
+    }
+
+    class Play extends Phaser.Scene {
+      constructor(){ super('Play'); }
+      create(){
+        this.score = 0;
+        this.waveIndex = 0;
+        this.playerLevel = 0;
+        this.isBossWave = false;
+        this.finishedWave = false;
+
+        this.createBackground();
+        this.createPlayer();
+        this.playerBullets = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image, maxSize: 200, runChildUpdate: true });
+        this.enemyBullets = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image, maxSize: 300, runChildUpdate: true });
+        this.enemies = this.physics.add.group();
+
+        this.physics.add.overlap(this.playerBullets, this.enemies, this.onPlayerBulletHitsEnemy, null, this);
+        this.physics.add.overlap(this.enemyBullets, this.player, this.onEnemyBulletHitsPlayer, null, this);
+        this.physics.add.overlap(this.enemies, this.player, this.onEnemyHitsPlayer, null, this);
+
+        this.cursors = this.input.keyboard.createCursorKeys();
+        this.keys = this.input.keyboard.addKeys('W,A,S,D,SPACE');
+        this.input.on('pointermove', p => { this.pointer = p; });
+
+        this.ui = {
+          score: this.add.text(12, 12, 'امتیاز: 0', { fontSize: '18px', color: '#fff' }),
+          wave: this.add.text(12, 38, 'موج: 1', { fontSize: '18px', color: '#fff' }),
+          hp: this.add.text(12, 64, 'HP: 100', { fontSize: '18px', color: '#fff' }),
+          lvl: this.add.text(12, 90, 'ارتقا: 0', { fontSize: '18px', color: '#fff' }),
+          banner: this.add.text(this.scale.width / 2, 90, '', {
+            fontSize: '28px',
+            color: '#fff',
+            fontStyle: 'bold',
+            backgroundColor: 'rgba(0,0,0,0.35)',
+            padding: { x: 16, y: 8 }
+          }).setOrigin(0.5).setAlpha(0)
+        };
+
+        this.sfx = new Sfx();
+        this.player.fireCooldown = 0;
+        this.player.bombReady = true;
+        this.boss = null;
+
+        this.spawnWave();
+      }
+
+      createBackground(){
+        this.stars = this.add.particles('plume').createEmitter({
+          x: { min: 0, max: this.scale.width },
+          y: { min: -10, max: this.scale.height + 10 },
+          speedY: { min: 20, max: 80 },
+          lifespan: 5000,
+          scale: { start: 0.12, end: 0 },
+          alpha: { start: 0.7, end: 0 },
+          frequency: 80
+        });
+        this.cameras.main.setBackgroundColor('#000611');
+      }
+
+      createPlayer(){
+        this.player = this.physics.add.sprite(this.scale.width / 2, this.scale.height * 0.82, 'player_0');
+        this.player.setCollideWorldBounds(true);
+        this.player.speed = 260;
+        this.player.maxHP = 100;
+        this.player.hp = this.player.maxHP;
+        this.player.invulnerable = 0;
+        this.player.level = 0;
+
+        this.engineEmitter = this.add.particles('plume').createEmitter({
+          speed: { min: 20, max: 70 },
+          lifespan: 350,
+          scale: { start: 0.55, end: 0 },
+          alpha: { start: 0.9, end: 0 },
+          blendMode: 'ADD',
+          follow: this.player,
+          followOffset: { x: 0, y: 22 },
+          quantity: 2,
+          frequency: 60
+        });
+      }
+
+      spawnWave(){
+        if (this.boss) return;
+
+        this.ui.banner.setText(this.waveIndex % 3 === 2 ? 'باس در راه' : 'موج ' + (this.waveIndex + 1));
+        this.ui.banner.setAlpha(1);
+        this.tweens.add({ targets: this.ui.banner, alpha: 0, duration: 1000, delay: 1200 });
+
+        this.isBossWave = (this.waveIndex % 3 === 2);
+        this.finishedWave = false;
+
+        this.ui.wave.setText('موج: ' + (this.waveIndex + 1));
+
+        if (this.isBossWave) {
+          this.spawnBoss();
+          return;
+        }
+
+        const patterns = [
+          { type: 'small', count: 6, interval: 550, behavior: 'straight' },
+          { type: 'small', count: 4, interval: 650, behavior: 'sine' },
+          { type: 'med', count: 3, interval: 900, behavior: 'strafe' }
+        ];
+
+        let delay = 400;
+        patterns.forEach((p) => {
+          this.time.delayedCall(delay, () => this.spawnPattern(p));
+          delay += (p.count * (p.interval || 600)) + 250;
+        });
+
+        this.time.delayedCall(delay + 1000, () => {
+          this.waveIndex += 1;
+          if (!this.finishedWave) this.spawnWave();
+        });
+      }
+
+      spawnPattern(p){
+        for (let i = 0; i < p.count; i++) {
+          this.time.delayedCall(i * (p.interval || 600), () => {
+            let x = Phaser.Math.Between(60, this.scale.width - 60);
+            this.spawnEnemy(p.type || 'small', x, -20, p.behavior || 'straight');
+          });
+        }
+      }
+
+      spawnEnemy(type, x, y, behavior='straight'){
+        let enemy = this.enemies.create(x, y, type === 'med' ? 'enemy_med' : 'enemy_small');
+        enemy.hp = type === 'med' ? 28 : 12;
+        enemy.speed = type === 'med' ? 70 : 95;
+        enemy.behavior = behavior;
+        enemy.shootRate = type === 'med' ? 1600 : 2000;
+        enemy.spawnTime = this.time.now;
+        enemy.lastShot = 0;
+        enemy.setDepth(2);
+        return enemy;
+      }
+
+      spawnBoss(){
+        this.boss = new Boss(this, this.scale.width / 2, -120);
+        this.add.existing(this.boss);
+        this.physics.add.existing(this.boss);
+        this.boss.body.setCollideWorldBounds(true);
+        this.physics.add.overlap(this.playerBullets, this.boss.group, this.onPlayerBulletHitsBoss, null, this);
+      }
+
+      onPlayerBulletHitsEnemy(bullet, enemy){
+        if (!bullet || !enemy || !enemy.active) return;
+        bullet.destroy();
+        enemy.hp -= 10 + this.playerLevel * 4;
+        if (enemy.hp <= 0) {
+          enemy.destroy();
+          this.score += 25;
+          this.sfx.playExplosion();
+          this.updateHud();
+          return;
+        }
+        this.sfx.playHit();
+      }
+
+      onPlayerBulletHitsBoss(bullet, bossPart){
+        if (!bullet || !this.boss) return;
+        bullet.destroy();
+        this.boss.takeDamage(10 + this.playerLevel * 6);
+        this.sfx.playHit();
+        if (this.boss.dead) {
+          this.score += 500;
+          this.playerLevel = Math.min(2, this.playerLevel + 1);
+          this.player.setTexture('player_' + this.playerLevel);
+          this.player.maxHP += 20;
+          this.player.hp = Math.min(this.player.maxHP, this.player.hp + 25);
+          this.player.speed += 15;
+          this.updateHud();
+          this.boss.destroy();
+          this.boss = null;
+          this.isBossWave = false;
+          this.finishedWave = true;
+          this.waveIndex += 1;
+          this.time.delayedCall(700, () => this.spawnWave());
+        }
+      }
+
+      onEnemyBulletHitsPlayer(player, bullet){
+        if (!bullet || !bullet.active) return;
+        bullet.destroy();
+        if (this.player.invulnerable > 0) return;
+        this.player.hp -= 12;
+        this.player.invulnerable = 750;
+        this.sfx.playPlayerHit();
+        this.updateHud();
+        if (this.player.hp <= 0) this.restartScene();
+      }
+
+      onEnemyHitsPlayer(player, enemy){
+        if (!enemy || !enemy.active) return;
+        enemy.destroy();
+        if (this.player.invulnerable > 0) return;
+        this.player.hp -= 18;
+        this.player.invulnerable = 1000;
+        this.sfx.playPlayerHit();
+        this.updateHud();
+        if (this.player.hp <= 0) this.restartScene();
+      }
+
+      restartScene(){
+        this.sfx.playExplosion();
+        this.scene.restart();
+      }
+
+      update(time, delta){
+        delta *= 0.001;
+
+        let vx = 0, vy = 0;
+        if (this.cursors.left.isDown || this.keys.A.isDown) vx = -1;
+        if (this.cursors.right.isDown || this.keys.D.isDown) vx = 1;
+        if (this.cursors.up.isDown || this.keys.W.isDown) vy = -1;
+        if (this.cursors.down.isDown || this.keys.S.isDown) vy = 1;
+
+        if (this.pointer && this.pointer.isDown) {
+          let dx = this.pointer.worldX - this.player.x;
+          let dy = this.pointer.worldY - this.player.y;
+          vx = Phaser.Math.Clamp(dx / 100, -1, 1);
+          vy = Phaser.Math.Clamp(dy / 100, -1, 1);
+        }
+
+        let mag = Math.hypot(vx, vy);
+        if (mag > 0) { vx /= mag; vy /= mag; }
+        this.player.setVelocity(vx * this.player.speed, vy * this.player.speed);
+
+        if (this.player.invulnerable > 0) this.player.invulnerable -= delta * 1000;
+
+        if (time - this.player.fireCooldown > 220 - this.playerLevel * 35) {
+          this.firePlayer();
+          this.player.fireCooldown = time;
+        }
+
+        if (Phaser.Input.Keyboard.JustDown(this.keys.SPACE) && this.player.bombReady) {
+          this.player.bombReady = false;
+          this.doBomb();
+          this.time.delayedCall(12000, () => { this.player.bombReady = true; });
+        }
+
+        this.enemies.children.iterate((enemy) => {
+          if (!enemy || !enemy.active) return;
+          let t = (time - enemy.spawnTime) / 1000;
+
+          if (enemy.behavior === 'sine') {
+            enemy.x += Math.sin(t * 2 + enemy.y * 0.02) * 1.6;
+            enemy.y += enemy.speed * delta;
+          } else if (enemy.behavior === 'strafe') {
+            enemy.x += Math.cos(t * 2) * 2.1;
+            enemy.y += enemy.speed * delta;
+          } else if (enemy.behavior === 'kamikaze') {
+            let angle = Phaser.Math.Angle.Between(enemy.x, enemy.y, this.player.x, this.player.y);
+            enemy.x += Math.cos(angle) * (enemy.speed + 25) * delta;
+            enemy.y += Math.sin(angle) * (enemy.speed + 25) * delta;
+          } else {
+            enemy.y += enemy.speed * delta;
+          }
+
+          if (time - enemy.lastShot > enemy.shootRate) {
+            enemy.lastShot = time;
+            this.enemyShoot(enemy);
+          }
+
+          if (enemy.y > this.scale.height + 40) enemy.destroy();
+        });
+
+        if (this.boss) this.boss.update(time, delta);
+
+        this.enemyBullets.children.iterate((bullet) => {
+          if (!bullet || !bullet.active) return;
+          if (bullet.y > this.scale.height + 50 || bullet.y < -50 || bullet.x < -50 || bullet.x > this.scale.width + 50) bullet.destroy();
+        });
+
+        this.updateHud();
+      }
+
+      firePlayer(){
+        const cX = this.player.x;
+        const cY = this.player.y - 18;
+
+        if (this.playerLevel === 0) {
+          this.spawnPlayerBullet(cX, cY, 0);
+        } else if (this.playerLevel === 1) {
+          this.spawnPlayerBullet(cX - 10, cY, -0.1);
+          this.spawnPlayerBullet(cX + 10, cY, 0.1);
+        } else {
+          this.spawnPlayerBullet(cX - 18, cY, -0.18);
+          this.spawnPlayerBullet(cX, cY, 0);
+          this.spawnPlayerBullet(cX + 18, cY, 0.18);
+        }
+        this.sfx.playLaser();
+      }
+
+      spawnPlayerBullet(x, y, angle){
+        let bullet = this.playerBullets.get(x, y, 'bullet');
+        if (!bullet) return;
+        bullet.setActive(true).setVisible(true);
+        bullet.body.setVelocity(Math.sin(angle) * 260, -700);
+        bullet.body.allowGravity = false;
+        this.time.delayedCall(2200, () => { if (bullet && bullet.active) bullet.destroy(); });
+      }
+
+      enemyShoot(enemy){
+        let bullet = this.enemyBullets.get(enemy.x, enemy.y + 10, 'bullet_yellow');
+        if (!bullet) return;
+        bullet.setActive(true).setVisible(true);
+        let angle = Phaser.Math.Angle.Between(enemy.x, enemy.y, this.player.x, this.player.y);
+        let speed = 180 + Phaser.Math.Between(0, 70);
+        bullet.body.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
+        bullet.body.allowGravity = false;
+      }
+
+      doBomb(){
+        this.sfx.playBomb();
+        this.spawnExplosion(this.player.x, this.player.y, 3.2);
+
+        this.enemies.children.iterate((e) => {
+          if (!e || !e.active) return;
+          let dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, e.x, e.y);
+          if (dist < 220) {
+            e.hp -= 35 + this.playerLevel * 20;
+            if (e.hp <= 0) {
+              e.destroy();
+              this.score += 20;
+            }
+          }
+        });
+
+        if (this.boss) {
+          this.boss.takeDamage(80 + this.playerLevel * 35);
+          if (this.boss.dead) {
+            this.score += 500;
+            this.playerLevel = Math.min(2, this.playerLevel + 1);
+            this.player.setTexture('player_' + this.playerLevel);
+            this.player.maxHP += 20;
+            this.player.hp = Math.min(this.player.maxHP, this.player.hp + 25);
+            this.player.speed += 15;
+            this.boss.destroy();
+            this.boss = null;
+            this.waveIndex += 1;
+            this.finishedWave = true;
+            this.time.delayedCall(600, () => this.spawnWave());
+          }
+        }
+
+        this.enemyBullets.clear(true, true);
+      }
+
+      spawnExplosion(x, y, scale = 1){
+        let particles = this.add.particles('plume');
+        let emitter = particles.createEmitter({
+          x, y,
+          speed: { min: -100, max: 100 },
+          angle: { min: 0, max: 360 },
+          scale: { start: 0.9 * scale, end: 0 },
+          lifespan: 500,
+          quantity: 18,
+          blendMode: 'ADD'
+        });
+        this.time.delayedCall(450, () => particles.destroy());
+      }
+
+      updateHud(){
+        this.ui.score.setText('امتیاز: ' + this.score);
+        this.ui.hp.setText('HP: ' + Math.max(0, this.player.hp));
+        this.ui.lvl.setText('ارتقا: ' + this.playerLevel);
+        this.ui.wave.setText('موج: ' + (this.waveIndex + 1));
+      }
+    }
+
+    class Boss extends Phaser.GameObjects.Container {
+      constructor(scene, x, y){
+        super(scene, x, y);
+        this.scene = scene;
+        this.hpMax = 1200;
+        this.hp = this.hpMax;
+        this.dead = false;
+        this.phase = 1;
+
+        this.bodySprite = scene.add.rectangle(0, 0, 220, 120, 0x8844ff);
+        this.bodySprite.setStrokeStyle(4, 0xffccff);
+        this.add(this.bodySprite);
+
+        this.left = scene.add.circle(-64, 0, 18, 0xff6b6b);
+        this.right = scene.add.circle(64, 0, 18, 0x6bffb3);
+        this.add(this.left);
+        this.add(this.right);
+
+        this.healthBar = scene.add.rectangle(0, -80, 180, 10, 0x44ff88).setOrigin(0.5);
+        this.add(this.healthBar);
+
+        this.group = scene.physics.add.group();
+        for (let i = 0; i < 4; i++) {
+          let part = scene.add.rectangle(-70 + i * 46, 12, 40, 40, 0xff0000, 0).setOrigin(0.5);
+          scene.physics.world.enable(part);
+          this.add(part);
+          this.group.add(part);
+        }
+
+        scene.physics.world.enable(this);
+        this.body.setSize(220, 120);
+        this.lastAttack = 0;
+        this.attackRate = 900;
+        this.moveTimer = 0;
+      }
+
+      takeDamage(value){
+        this.hp -= value;
+        if (this.hp <= 0) {
+          this.dead = true;
+          this.scene.spawnExplosion(this.x, this.y, 5);
+          this.destroy();
+          return;
+        }
+
+        if (this.hp / this.hpMax < 0.8) this.phase = 2;
+        if (this.hp / this.hpMax < 0.5) this.phase = 3;
+        this.updateHealthBar();
+      }
+
+      updateHealthBar(){
+        const ratio = Math.max(0, this.hp / this.hpMax);
+        this.healthBar.width = 180 * ratio;
+        if (ratio > 0.6) this.healthBar.fillColor = 0x44ff88;
+        else if (ratio > 0.25) this.healthBar.fillColor = 0xffcc00;
+        else this.healthBar.fillColor = 0xff4444;
+      }
+
+      update(time, delta){
+        if (this.y < 100) this.y += 50 * delta;
+        this.moveTimer += delta;
+        this.x = this.scene.scale.width / 2 + Math.sin(this.moveTimer * 0.9) * 180;
+
+        if (time - this.lastAttack > this.attackRate - (this.phase - 1) * 200) {
+          this.lastAttack = time;
+          this.attack();
+        }
+      }
+
+      attack(){
+        let count = this.phase === 1 ? 6 : this.phase === 2 ? 8 : 12;
+        let spread = this.phase === 1 ? 30 : this.phase === 2 ? 60 : 90;
+
+        for (let i = 0; i < count; i++) {
+          let angle = Phaser.Math.DegToRad(-90 + Phaser.Math.Between(-spread / 2, spread / 2));
+          let bullet = this.scene.enemyBullets.get(this.x, this.y + 20, 'bullet_yellow');
+          if (!bullet) continue;
+          bullet.setActive(true).setVisible(true);
+          let speed = 180 + Phaser.Math.Between(0, 120);
+          bullet.body.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
+          bullet.body.allowGravity = false;
+        }
+      }
+    }
+
+    class Sfx {
+      constructor(){
+        this.ctx = null;
+        try {
+          this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        } catch (e) {}
+      }
+      tone(freq, duration = 0.08, type = 'sine', gain = 0.05){
+        if (!this.ctx) return;
+        const osc = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        osc.type = type;
+        osc.frequency.value = freq;
+        g.gain.value = gain;
+        osc.connect(g);
+        g.connect(this.ctx.destination);
+        osc.start();
+        g.gain.exponentialRampToValueAtTime(0.0001, this.ctx.currentTime + duration);
+        osc.stop(this.ctx.currentTime + duration + 0.03);
+      }
+      playLaser(){ this.tone(1200, 0.06, 'sawtooth', 0.03); }
+      playHit(){ this.tone(760, 0.05, 'triangle', 0.04); }
+      playExplosion(){ this.tone(180, 0.18, 'sawtooth', 0.08); }
+      playPlayerHit(){ this.tone(200, 0.1, 'square', 0.05); }
+      playBomb(){ this.tone(90, 0.3, 'sine', 0.12); }
+    }
+
+    const config = {
+      type: Phaser.AUTO,
+      parent: 'gameContainer',
+      width: window.innerWidth,
+      height: window.innerHeight,
+      physics: { default: 'arcade', arcade: { debug: false } },
+      scene: [Boot, Play]
+    };
+
+    const game = new Phaser.Game(config);
+    window.addEventListener('resize', () => {
+      game.scale.resize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
